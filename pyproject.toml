@@ -1,0 +1,21 @@
+[project]
+name = "neural-nets-from-scratch"
+version = "0.1.0"
+description = "Building neural networks from scratch to understand them end to end."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+    "matplotlib",
+    "jupyter",
+    "rich",
+    "plotext",
+]
+
+[tool.setuptools.packages.find]
+include = ["common*"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
