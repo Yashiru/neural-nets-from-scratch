@@ -237,6 +237,21 @@ def loss_curve(values, title="Training loss", width=72, height=16):
     _plt.show()
 
 
+def curve(x, y, title="", xlabel="x", ylabel="y", width=72, height=16):
+    """Plot y against x in the terminal (plotext); for loss-vs-lr style sweeps."""
+    if not _HAS_PLOTEXT:
+        kv(f"min {ylabel}", f"{min(y):.4f}")
+        return
+    _plt.clf()
+    _plt.plot(x, y, marker="braille")
+    _plt.title(title)
+    _plt.xlabel(xlabel)
+    _plt.ylabel(ylabel)
+    _plt.plotsize(width, height)
+    _plt.theme("clear")
+    _plt.show()
+
+
 @contextmanager
 def training_progress(total, description="optimizing"):
     """Live training progress bar, used as a context manager.
