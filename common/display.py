@@ -17,6 +17,8 @@ Typical use:
     ui.section("Counts")
     ui.matrix(N, itos)
 """
+from contextlib import contextmanager
+
 import torch
 from matplotlib import colormaps
 from matplotlib.colors import LogNorm, Normalize
@@ -25,6 +27,13 @@ from rich.color import Color
 from rich.console import Console
 from rich.padding import Padding
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.rule import Rule
 from rich.style import Style
 from rich.table import Table
@@ -226,6 +235,37 @@ def loss_curve(values, title="Training loss", width=72, height=16):
     _plt.plotsize(width, height)
     _plt.theme("clear")
     _plt.show()
+
+
+@contextmanager
+def training_progress(total, description="optimizing"):
+    """Live training progress bar, used as a context manager.
+
+    Yields an `update(advance=1, **fields)` callable; pass `loss=` and `lr=`
+    floats to refresh the live readouts. Wrap the training loop with it::
+
+        with ui.training_progress(steps) as step_done:
+            for i in range(steps):
+                ...
+                step_done(loss=loss.item(), lr=lr)
+    """
+    progress = Progress(
+        TextColumn("  [bold]{task.description}"),
+        BarColumn(bar_width=None, complete_style="cyan", finished_style="green"),
+        MofNCompleteColumn(),
+        TextColumn("· loss [bold cyan]{task.fields[loss]:>6.4f}"),
+        TextColumn("· lr [bold magenta]{task.fields[lr]:<7.4g}"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    with progress:
+        task = progress.add_task(description, total=total,
+                                 loss=float("nan"), lr=float("nan"))
+
+        def update(advance=1, **fields):
+            progress.update(task, advance=advance, **fields)
+
+        yield update
 
 
 # ─────────────────────────────────────────────────────────────────────────────
