@@ -252,6 +252,27 @@ def curve(x, y, title="", xlabel="x", ylabel="y", width=72, height=16):
     _plt.show()
 
 
+def histogram(values, bins=50, title="Histogram", xlabel="value", ylabel="count",
+              width=72, height=16):
+    """Plot a histogram of `values` in the terminal with plotext.
+
+    `values` is a flat 1-D sequence (e.g. a list of floats). Use it to profile
+    activation distributions: a healthy tanh layer spreads out, a saturated one
+    piles up against ±1.
+    """
+    if not _HAS_PLOTEXT:
+        kv("samples", f"{len(values):,}")
+        return
+    _plt.clf()
+    _plt.hist(values, bins)
+    _plt.title(title)
+    _plt.xlabel(xlabel)
+    _plt.ylabel(ylabel)
+    _plt.plotsize(width, height)
+    _plt.theme("clear")
+    _plt.show()
+
+
 @contextmanager
 def training_progress(total, description="optimizing"):
     """Live training progress bar, used as a context manager.
