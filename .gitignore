@@ -13,3 +13,4 @@ data/*
 !data/README.md
 *.pt
 *.pth
+notes.txt
