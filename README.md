@@ -1,9 +1,9 @@
 # neural-nets-from-scratch
 
-A personal playground for building neural networks from scratch, one idea at a
-time, to understand how they actually work end to end. Each experiment is a
-self-contained step, from a simple character-level language model up to a small
-Transformer and a tokenizer.
+My personal playground for building neural networks from scratch, one idea at a
+time, to understand how they actually work end to end. I treat each experiment
+as a self-contained build, from a simple character-level language model up to a
+small Transformer and a tokenizer.
 
 ## Experiments
 

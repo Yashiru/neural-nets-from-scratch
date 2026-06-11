@@ -1,6 +1,10 @@
 """Experiment: 01-bigram.
 
-Scratch space for this experiment. Replace this with your implementation.
+I build a character-level bigram language model two ways and show they land on
+the same distribution: once by counting letter pairs and normalizing, and once
+as a single-layer neural net trained by gradient descent. The point is to see
+"counting bigrams" and "training a network" as two views of the same object.
+
 Run from the repo root with:  python3 src/01-bigram/main.py
 """
 import math

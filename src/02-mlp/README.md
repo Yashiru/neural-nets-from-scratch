@@ -1,14 +1,14 @@
 # 02 | MLP
 
 A character-level language model with a **multi-layer perceptron**, following
-Bengio et al. (2003). Where the bigram only looked one letter back, here we feed
+Bengio et al. (2003). Where the bigram only looked one letter back, here I feed
 the model a window of several letters and let it learn its own features, through
 **embeddings** and a hidden layer, instead of reading them off a count matrix.
 
-The goal is to lift the bigram's hard limit (one letter of context) and, along
-the way, meet the building blocks every later experiment reuses: embeddings, a
-hidden layer, minibatch training, a learning-rate schedule, and an honest
-train/dev/test split.
+I'm lifting the bigram's hard limit (one letter of context) and, along the way,
+building the blocks every later experiment reuses: embeddings, a hidden layer,
+minibatch training, a learning-rate schedule, and an honest train/dev/test
+split.
 
 ## The problem
 
@@ -160,16 +160,16 @@ python3 src/02-mlp/main.py
 It loads the data, trains for 50k steps (~15s on CPU) with a live progress bar,
 then prints the evaluation and a batch of sampled names.
 
-## What it teaches
+## Takeaways
 
 - **Embeddings** beat one-hot: the model learns a dense, shared representation of
   characters instead of a row per symbol.
-- Why we widen context with an MLP instead of a bigger count table, the table
+- Why I widen context with an MLP instead of a bigger count table, the table
   grows exponentially, the network doesn't.
 - The standard training loop: **minibatch SGD**, a **learning-rate schedule**,
   and a **train/dev/test split** to measure generalization honestly.
 - A hint of what's next: the initial loss is ~`27`, far higher than the ~`3.3`
   you'd expect from a uniform guess. That spike means the network starts
   *overconfident*, a symptom of poor **initialization**. Fixing that (and
-  keeping activations healthy with **batch norm**) is exactly the subject of the
-  `03-activations-batchnorm` experiment.
+  keeping activations healthy with **batch norm**) is what I take on next in
+  `03-activations-batchnorm`.

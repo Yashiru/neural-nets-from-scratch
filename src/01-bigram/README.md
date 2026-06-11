@@ -1,14 +1,14 @@
 # 01 | Bigram
 
-A character-level language model, built two ways that give exactly the same
-result:
+A character-level language model, which I build two ways that give exactly the
+same result:
 
 1. **By counting**: count letter pairs and normalize.
 2. **As a neural network**: a single linear layer trained by gradient descent
    recovers the same probabilities.
 
-The goal isn't to generate pretty names, but to see that "counting bigrams" and
-"training a network" are two views of the same object.
+I'm not after pretty names here, I want to see for myself that "counting
+bigrams" and "training a network" are two views of the same object.
 
 ## The problem
 
@@ -77,13 +77,12 @@ python3 src/01-bigram/main.py
 Both models run one after the other and print their results in the terminal
 (matrices, distributions, curves, and sampled names).
 
-## What it teaches
+## Takeaways
 
 - An *n*-gram can be written either as a count or as a neural network, and both
   converge to the same thing.
 - The role of **softmax** in turning free-form scores into a distribution.
-- The **NLL** as both a loss function and a quality measure.
+- The **NLL** works as both a loss function and a quality measure.
 - Count-based smoothing ≈ regularization on the network side.
 - The limit of the bigram: it only looks one letter back, hence the unrealistic
-  names. That's exactly what the `02-mlp` experiment will lift by widening the
-  context.
+  names. That's exactly what I lift in `02-mlp` by widening the context.

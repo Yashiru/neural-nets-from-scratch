@@ -5,10 +5,10 @@ the focus shifts from architecture to the **health of the signal** inside the
 network: how the activations and gradients behave at initialization and stay
 behaved during training.
 
-The `02` experiment ended on a warning sign, the loss started around `27`, far
+My `02` experiment ended on a warning sign, the loss started around `27`, far
 above what a uniform guess should give, a symptom that the network began
-*overconfident* because of a poor initialization. This experiment takes that on
-with three measured fixes:
+*overconfident* because of a poor initialization. Here I take that on with three
+measured fixes:
 
 1. **Tame the output layer** so training starts at a sane loss instead of a spike.
 2. **Scale the hidden layer** (Kaiming init) so `tanh` doesn't saturate.
@@ -159,7 +159,7 @@ histogram and the saturated/dead counts), trains for 50k steps with a live
 progress bar, then prints the held-out evaluation, a sampling trace, and a batch
 of generated names.
 
-## What it teaches
+## Takeaways
 
 - **Initialization is not a detail.** A bad one wastes the early training (the
   loss spike) and can hobble whole layers (`tanh` saturation). Both are fixable in
@@ -174,7 +174,7 @@ of generated names.
 - **BatchNorm**, what it normalizes, why it keeps the network conditioned
   *throughout* training rather than only at init, and the running-stats trick that
   lets a single example be evaluated without a batch.
-- A pointer to what's next: we've been trusting `loss.backward()` to compute the
-  gradients. `04-manual-backprop` opens that box and derives them by hand, so the
-  health of these gradients stops being something we infer from histograms and
-  becomes something we can compute directly.
+- A pointer to what's next: so far I've trusted `loss.backward()` to compute the
+  gradients. In `04-manual-backprop` I open that box and derive them by hand, so
+  the health of these gradients stops being something I infer from histograms and
+  becomes something I can compute directly.

@@ -1,6 +1,10 @@
 """Experiment: 06-gpt.
 
-Scratch space for this experiment. Replace this with your implementation.
+Next idea I want to try: build a small decoder-only Transformer from scratch
+(token + positional embeddings, masked self-attention, residual MLP blocks)
+and see how self-attention compares to the fixed-window MLP on the same names.
+Not built yet.
+
 Run from the repo root with:  python3 src/06-gpt/main.py
 """
 

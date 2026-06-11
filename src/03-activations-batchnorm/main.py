@@ -4,9 +4,10 @@ Same character-level MLP as 02-mlp (Bengio 2003 style): each character is
 embedded, the last `BLOCK_SIZE` embeddings are concatenated and fed through a
 single tanh hidden layer, then a linear layer produces the next-char logits.
 
-What changes here is the *initialization*: the output layer is scaled down so
-the first logits are near-uniform. That kills the loss spike at step 0 and
-stops the early steps from being wasted just squashing oversized weights.
+Here I shift focus from architecture to the health of the signal. I scale the
+output layer down so the first logits are near-uniform, which kills the loss
+spike at step 0 and stops the early steps from being wasted just squashing
+oversized weights.
 
 Run from the repo root with:
     python3 src/03-activations-batchnorm/main.py    # train + evaluate + sample

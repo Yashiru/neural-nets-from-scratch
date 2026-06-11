@@ -1,8 +1,9 @@
 """Experiment: 02-mlp.
 
-Character-level MLP language model (Bengio 2003 style): each character is
-embedded, the last `BLOCK_SIZE` embeddings are concatenated and fed through a
-single tanh hidden layer, then a linear layer produces the next-char logits.
+I widen the bigram's one-letter context into a character-level MLP language
+model (Bengio 2003 style): each character is embedded, the last `BLOCK_SIZE`
+embeddings are concatenated and fed through a single tanh hidden layer, then a
+linear layer produces the next-char logits.
 
 Run from the repo root with:
     python3 src/02-mlp/main.py            # train + evaluate + sample
@@ -104,7 +105,7 @@ def generate(params, itos, block_size, generator, max_len=40):
 
 
 def lr_probe(Xtr, Ytr, vocab_size, g, steps=1000):
-    """Sweep the learning rate to find a good order of magnitude (Karpathy §10).
+    """Sweep the learning rate to find a good order of magnitude.
 
     Trains a *throwaway* model for `steps`, ramping the lr from 10**-3 to 10**0
     (one lr per step), recording (exponent, loss) at each step. The weights
