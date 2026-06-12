@@ -43,7 +43,7 @@ STEPS = 50000  # optimization steps (used when TRAIN is True)
 LR = 0.07  # base lr
 LR_FINE = LR / 10  # fine-tuning lr after the decay point
 
-TRAIN = False  # gradient check runs by default; set True to train with the hand-derived grads.
+TRAIN = True  # gradient check runs by default; set True to train with the hand-derived grads.
 
 
 def build_dataset(words, stoi, block_size):
@@ -130,7 +130,10 @@ def forward(params, Xb, Yb):
     logits = h @ W2 + b2  # (n, vocab_size)
 
     # --- loss ---
-    loss = F.cross_entropy(logits, Yb)
+    if Yb is None:
+        loss = None
+    else:
+        loss = F.cross_entropy(logits, Yb)
 
     cache = dict(
         emb=emb,
@@ -148,10 +151,10 @@ def forward(params, Xb, Yb):
     return loss, cache
 
 
-def manual_backward(params, Xb, Yb, c):
+def manual_backward(params, Xb, Yb, fwdCache):
     """Hand-derived gradients, op by op.
 
-    `c` is the forward cache (intermediate *values*, not gradients). Returns a
+    `fwdCache` is the forward cache (intermediate *values*, not gradients). Returns a
     dict {name: gradient} covering every tensor I check and every parameter I
     train with. Gradient rules I'm applying:
       - cross_entropy:  dlogits = (softmax(logits) - onehot(Y)) / n
@@ -170,38 +173,62 @@ def manual_backward(params, Xb, Yb, c):
     """
     C, W1, W2, b2, bngain, bnbias = params
     n = Xb.shape[0]
-    logits = c["logits"]
-    h = c["h"]
-    bnraw = c["bnraw"]
-    bnvar_inv = c["bnvar_inv"]
-    emb = c["emb"]
-    embcat = c["embcat"]
+    logits = fwdCache["logits"]
+    h = fwdCache["h"]
+    bnraw = fwdCache["bnraw"]
+    bnvar_inv = fwdCache["bnvar_inv"]
+    emb = fwdCache["emb"]
+    embcat = fwdCache["embcat"]
 
     # 1. cross_entropy  ->  dlogits
-    dlogits = None  # TODO
+    dlogits = (F.softmax(logits, dim=-1) - F.one_hot(Yb, num_classes=27)) / n
+    assert dlogits.shape == logits.shape, f"dlogits shape {dlogits.shape} should match logits shape {logits.shape}"
 
     # 2. output layer  logits = h @ W2 + b2  ->  dh, dW2, db2
-    dh = None  # TODO
-    dW2 = None  # TODO
-    db2 = None  # TODO
+    dh = dlogits @ W2.T
+    assert dh.shape == h.shape, f"dh shape {dh.shape} should match h shape {h.shape}"
+    dW2 = h.T @ dlogits
+    assert dW2.shape == W2.shape, f"dW2 shape {dW2.shape} should match W2 shape {W2.shape}"
+    db2 = dlogits.sum(0)
+    assert db2.shape == b2.shape, f"db2 shape {db2.shape} should match b2 shape {b2.shape}"
 
     # 3. tanh  h = tanh(hpreact)  ->  dhpreact
-    dhpreact = None  # TODO
+    dhpreact = (1 - h**2) * dh
+    assert dhpreact.shape == h.shape, f"dhpreact shape {dhpreact.shape} should match h shape {h.shape}"
 
     # 4. BatchNorm  hpreact = bngain * bnraw + bnbias  ->  dbngain, dbnbias, then dhprebn
-    dbngain = None  # TODO
-    dbnbias = None  # TODO
-    dhprebn = None  # TODO  (compact formula above)
+    # dbngain = dhpreact @ bnraw.T
+    # dbnbias = dhpreact.sum(0)
+    # dbnraw = bngain.T @ dhpreact
+    dbngain = (bnraw * dhpreact).sum(0, keepdim=True)
+    assert dbngain.shape == bngain.shape, f"dbngain shape {dbngain.shape} should match bngain shape {bngain.shape}"
+    dbnbias = dhpreact.sum(0, keepdim=True)
+    assert dbnbias.shape == bnbias.shape, f"dbnbias shape {dbnbias.shape} should match bnbias shape {bnbias.shape}"
+    # dbnraw  = bngain * dhpreact
+    dhprebn = bngain * bnvar_inv / n * (
+        n * dhpreact
+        - dhpreact.sum(0)
+        - n/(n-1) * bnraw * (dhpreact * bnraw).sum(0)
+    )
+    assert dhprebn.shape == h.shape, f"dhprebn shape {dhprebn.shape} should match h shape {h.shape}"
 
     # 5. hidden layer  hprebn = embcat @ W1  ->  dembcat, dW1
-    dembcat = None  # TODO
-    dW1 = None  # TODO
+    dembcat = dhprebn @ W1.T
+    assert dembcat.shape == embcat.shape, f"dembcat shape {dembcat.shape} should match embcat shape {embcat.shape}"
+    dW1 = embcat.T @ dhprebn
+    assert dW1.shape == W1.shape, f"dW1 shape {dW1.shape} should match W1 shape {W1.shape}"
 
     # 6. view  embcat = emb.view(n, -1)  ->  demb
-    demb = None  # TODO
+    demb = dembcat.view(emb.shape)
+    assert demb.shape == emb.shape, f"demb shape {demb.shape} should match emb shape {emb.shape}"
 
     # 7. indexing  emb = C[Xb]  ->  dC  (scatter-add)
-    dC = None  # TODO
+    dC = torch.zeros_like(C)
+    # for k in range(Xb.shape[0]):
+    #     for j in range(Xb.shape[1]):
+    #         dC[Xb[k, j]] += demb[k, j]
+    dC.index_add_(0, Xb.view(-1), demb.view(-1, N_EMBD))
+    assert dC.shape == C.shape, f"dC shape {dC.shape} should match C shape {C.shape}"
 
     return {
         "logits": dlogits,
@@ -277,6 +304,54 @@ def check_gradients(params, Xb, Yb):
         cmp(name, grads[name], t)
 
 
+@torch.no_grad()
+def bn_calibrate(params, Xtr):
+    """Freeze BatchNorm's population statistics, for sampling after training.
+
+    forward() always computes *batch* statistics, which are undefined for a
+    single example: var over 1 element divides by (n - 1) = 0 and returns NaN.
+    To sample one character at a time we need population stats instead — run one
+    forward up to the pre-activation over the whole train split and freeze its
+    mean/var. Returns (bnmean, bnvar), each (1, n_hidden).
+    """
+    C, W1, *_ = params
+    embcat = C[Xtr].view(Xtr.shape[0], -1)  # (N, block_size*n_embd)
+    hprebn = embcat @ W1  # (N, n_hidden)
+    bnmean = hprebn.mean(0, keepdim=True)  # (1, n_hidden)
+    bnvar = hprebn.var(0, keepdim=True)  # (1, n_hidden)  unbiased — fine over the full split
+    return bnmean, bnvar
+
+
+@torch.no_grad()
+def generate(params, itos, block_size, generator, bnmean, bnvar, max_len=40):
+    """Sample one name autoregressively, returning (name, trace).
+
+    Mirrors forward()'s math but runs BatchNorm in inference mode: it normalizes
+    with the frozen population stats (bnmean, bnvar) from bn_calibrate() instead
+    of per-batch stats, so a single-example pass is well-defined. The trace is a
+    list of (context, next_char, prob) tuples, fed to ui.trace.
+    """
+    C, W1, W2, b2, bngain, bnbias = params
+    context = [0] * block_size
+    out, steps = [], []
+    while len(out) < max_len:
+        # one-context forward, BatchNorm frozen (no batch stats, no NaN)
+        embcat = C[torch.tensor([context])].view(1, -1)  # (1, block_size*n_embd)
+        hprebn = embcat @ W1  # (1, n_hidden)
+        hpreact = bngain * (hprebn - bnmean) * (bnvar + 1e-5) ** -0.5 + bnbias
+        logits = torch.tanh(hpreact) @ W2 + b2  # (1, vocab_size)
+
+        probs = F.softmax(logits, dim=1)
+        ix = torch.multinomial(probs, num_samples=1, generator=generator).item()
+        ctx = "".join(itos[i] for i in context)
+        steps.append((ctx, itos[ix], float(probs[0, ix])))
+        context = context[1:] + [ix]
+        if ix == 0:  # '.' = end-of-name token
+            break
+        out.append(itos[ix])
+    return "".join(out), steps
+
+
 def train(params, Xtr, Ytr, g):
     """Train using ONLY the hand-derived gradients — no loss.backward()."""
     decay_at = int(0.6 * STEPS)
@@ -298,6 +373,7 @@ def train(params, Xtr, Ytr, g):
             step_done(loss=loss.item(), lr=lr)
 
     ui.kv("final loss", f"{losses[-1]:.4f}  nats  (last minibatch)")
+    ui.kv("initial loss", f"{losses[0]:.4f}  nats")
     ui.loss_curve(losses, title="Training loss  (manual backprop)")
 
 
@@ -332,6 +408,17 @@ def main():
     if TRAIN:
         ui.section("Training  (manual gradients only)")
         train(params, Xtr, Ytr, g)
+
+        # ------------------------------ Generate names ------------------------------ #
+        bnmean, bnvar = bn_calibrate(params, Xtr)  # freeze BN stats for single-example sampling
+        samples = [generate(params, itos, BLOCK_SIZE, g, bnmean, bnvar) for _ in range(20)]
+        first = next((s for s in samples if s[0]), samples[0])
+
+        ui.section("Sampling Trace  (first generated name)")
+        ui.trace(first[1])
+
+        ui.section(f"Generated Names  ({len(samples)} samples · seed {SEED})")
+        ui.name_list([s for s in samples if s[0]])
 
 
 if __name__ == "__main__":
