@@ -96,9 +96,10 @@ def generate(model, itos, block_size, max_len=40):
     context = [0] * block_size
     out, steps = [], []
     while len(out) < max_len:
-        _, logits = model(torch.tensor([context]))
+        logits = model(torch.tensor([context]))  # (1, T, vocab_size)
+        logits = logits[:, -1, :]  # keep only the last step's prediction -> (1, vocab_size)
 
-        probs = F.softmax(logits, dim=1)
+        probs = F.softmax(logits, dim=-1)
         ix = torch.multinomial(probs, num_samples=1).item()
         ctx = "".join(itos[i] for i in context)
         steps.append((ctx, itos[ix], float(probs[0, ix])))
