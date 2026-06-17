@@ -213,6 +213,76 @@ cawrell - roner - jatace - jayla - kam - meline - raylee - anely - saylee - azid
 > pulls the average loss down. The Shakespeare stream has no padding, so its loss is the
 > more honest one to trust.
 
+## Profiling: why the hand-rolled version was slow
+
+Everything up to here was written by hand on purpose. From `01` onward the goal was to
+*see* the mechanics. A `Linear` is a matmul plus a bias, an optimizer step is
+`p -= lr * p.grad`, a LayerNorm is a mean, a variance and a rescale, and every layer
+spells the math out operation by operation. That is the right call for learning and a
+poor one for speed, and the ~27-minute Shakespeare run was a good excuse to find out
+*why*, with a real profiler instead of guesswork.
+
+`torch.profiler` records both CPU and CUDA time per operation. The first pass said the
+training was already **GPU-bound** (the CPU spent most of its time blocked on a full
+command queue, waiting on the GPU), and that the GPU time split in two: a healthy core
+of matrix multiplies, and a long tail of *many tiny kernels*. That tail is exactly
+where hand-rolled code pays for its clarity.
+
+![Profiler before the optimizations](assets/profileBeforeOptimizations.png)
+
+Three things stood out, and each maps to something PyTorch's built-ins do that the
+naive version does not.
+
+**Too many small matmuls: batch the heads.** `MultiHeadAttention` was a Python list of
+`Head` objects, each running its own little `(n_embd → head_size)` projections. Across
+4 heads and 4 layers that is dozens of tiny matmuls every step; the profiler counted
+~178 `aten::mm` calls. A GPU is happiest with a few *large* matmuls: every
+kernel launch has fixed overhead, and a tiny GEMM leaves most of the cores idle. The
+fix is the standard one: do **one** big projection for all heads at once, then
+`view`/`transpose` the result into `(B, n_head, T, head_size)` and let a single batched
+matmul handle every head together. That took `aten::mm` from ~178 to ~70 calls per
+step. PyTorch's own `nn.MultiheadAttention` batches the heads this way internally; the
+list-of-heads form is the readable one, not the fast one.
+
+**A Python loop over parameters: vectorize the optimizer.** The optimizer stepped each
+tensor in a Python `for` loop: `p.data -= lr * p.grad`, once per parameter, ~160 times
+a step, each a separate kernel launch. `torch._foreach_add_` (and `_foreach_zero_` for
+the gradients) takes a whole *list* of tensors and applies the update in one fused
+multi-tensor kernel: the same arithmetic in a fraction of the launches. This is exactly what
+`torch.optim`'s optimizers do under the hood (their `foreach`/`fused` paths); the hand
+loop is the version that makes the update obvious.
+
+**LayerNorm as five ops: fuse it.** The hand-written `LayerNorm` computed the mean, the
+variance, the normalization, the scale and the shift as separate tensor operations.
+Each is its own CUDA kernel that reads the whole tensor from memory and writes it back;
+these ops are memory-bandwidth bound, so five passes cost roughly five times the
+traffic, plus five launches, every call, forward *and* backward. `F.layer_norm` does
+the lot in a **single fused kernel**, one pass over the data. Swapping it in collapsed
+the elementwise tail: over ten steps, divisions fell from ~580 to ~40, multiplies from
+~770 to ~140, and the separate `mean`/`var` ops vanished. (As a bonus, `F.layer_norm`
+uses the biased variance the canonical LayerNorm expects, where my hand version used
+the unbiased estimator.)
+
+On top of those I turned on **mixed precision** (autocast) so the matmuls run on the
+2080 Ti's fp16 tensor cores. The catch the profiler made concrete: this only helps once
+the model is large enough to be compute-bound. On the tiny names model fp16 was
+measurably *slower* (the cost of casting fp32↔fp16 outweighed the tensor-core gain),
+so AMP sits behind a flag, off by default.
+
+![Profiler after the optimizations](assets/profileAfterOptimization.png)
+
+Together these took the step from roughly **32 ms to about 19 ms** on the same
+hardware, with no change to what the model computes.
+
+The honest summary: none of this made the math better, it made the *same* math hit the
+hardware better. The hand-rolled layers were never "unoptimized" by accident; they
+were written to be read, one operation at a time, and one operation at a time is one
+kernel at a time. PyTorch is faster because its library functions do three things the
+naive code does not: **fuse** many operations into one kernel (LayerNorm), **batch**
+many tensors into one launch (the optimizer, the heads), and reach **hardware
+features** like tensor cores (AMP). Writing the slow version first is what made it
+clear what those built-ins are actually buying.
+
 ## Running the experiment
 
 From the repo root:
@@ -244,6 +314,11 @@ gitignored; `data/README.md` has the one-line command to fetch it.
   a target shifted by one at every position, not a single next character.
 - **A from-scratch model needs its own `.to(device)`.** Move tensors through `.data` to
   keep them trainable leaves, and do not forget buffers like the mask.
+- **Hand-rolled is clear, not fast, and the gap is the lesson.** Profiling put the
+  cost in many tiny kernels: per-head matmuls, a per-parameter optimizer loop, a
+  five-op LayerNorm. Batching the heads, `torch._foreach_` in the optimizer and a fused
+  `F.layer_norm` cut the step from ~32 to ~19 ms. PyTorch is faster because it fuses,
+  batches and reaches tensor cores; the naive version runs one kernel per operation.
 - A pointer to what is next: the model still reads one character at a time, which makes
   sequences long and the vocabulary tiny. In `07-tokenizer` I replace the character
   vocabulary with a learned subword one (byte-pair encoding), trading a bigger
