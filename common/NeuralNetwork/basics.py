@@ -34,6 +34,10 @@ class Sequential:
             layer.training = mode
     def eval(self):
         self.train(False)
+    def to(self, device):
+        for layer in self.layers:
+            layer.to(device)
+        return self
 
 class Linear:
     def __init__(self, fan_in, fan_out, bias=True):
@@ -46,6 +50,11 @@ class Linear:
         return self.out
     def parameters(self):
         return [self.weight] + ([] if self.bias is None else [self.bias])
+    def to(self, device):
+        self.weight.data = self.weight.data.to(device)
+        if self.bias is not None:
+            self.bias.data = self.bias.data.to(device)
+        return self
     
 class Tanh:
     def __call__(self, x):
@@ -60,6 +69,8 @@ class ReLu:
         return self.out
     def parameters(self):
         return []
+    def to(self, device):
+        return self
     
 class BatchNorm1d:
     def __init__(self, n, momentum=0.1):
@@ -129,3 +140,7 @@ class LayerNorm:
         return self.out
     def parameters(self):
         return [self.gamma, self.beta]
+    def to(self, device):
+        self.gamma.data = self.gamma.data.to(device)
+        self.beta.data = self.beta.data.to(device)
+        return self

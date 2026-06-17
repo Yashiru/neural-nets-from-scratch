@@ -23,6 +23,7 @@ STEPS = 50_000  # optimization steps (used when TRAIN is True)
 LR = 0.07  # base lr
 LR_FINE = LR / 10  # fine-tuning lr after the decay point
 FLATTEN_CONSECUTIVE = 2  # how many consecutive characters to flatten into one vector
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # train on the GPU when available
 
 
 def main():
@@ -33,6 +34,7 @@ def main():
     vocab_size = len(itos)
 
     model = GPT(vocab_size, N_EMBD, n_head=4, n_layer=4)
+    model.to(DEVICE)
 
     ui.banner(
         "MANUAL BACKPROPAGATION  (tensor-level)",
@@ -51,6 +53,7 @@ def main():
     )
     ui.kv("parameters", f"{sum(p.nelement() for p in model.parameters()):,}")
     ui.kv("batch size (n)", BATCH_SIZE)
+    ui.kv("device", DEVICE)
 
     # --------------------- Train with the manual gradients ---------------------- #
     ui.section("Training  (manual gradients only)")
@@ -71,9 +74,10 @@ def train(model, Xtr, Ytr):
     """Train using ONLY the hand-derived gradients — no loss.backward()."""
     decay_at = int(0.6 * STEPS)
     losses = []
+    Xtr, Ytr = Xtr.to(DEVICE), Ytr.to(DEVICE)  # move the whole dataset to the GPU once
     with ui.training_progress(STEPS) as step_done:
         for step in range(STEPS):
-            ix = torch.randint(0, Xtr.shape[0], (BATCH_SIZE,))
+            ix = torch.randint(0, Xtr.shape[0], (BATCH_SIZE,), device=DEVICE)
             Xb, Yb = Xtr[ix], Ytr[ix]
             logits = model(Xb)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Yb.view(-1))
@@ -96,7 +100,7 @@ def generate(model, itos, block_size, max_len=40):
     context = [0] * block_size
     out, steps = [], []
     while len(out) < max_len:
-        logits = model(torch.tensor([context]))  # (1, T, vocab_size)
+        logits = model(torch.tensor([context], device=DEVICE))  # (1, T, vocab_size)
         logits = logits[:, -1, :]  # keep only the last step's prediction -> (1, vocab_size)
 
         probs = F.softmax(logits, dim=-1)

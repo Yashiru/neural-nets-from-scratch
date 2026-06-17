@@ -54,6 +54,13 @@ class Head:
             + list(self.value.parameters())
         )
 
+    def to(self, device):
+        self.key.to(device)
+        self.query.to(device)
+        self.value.to(device)
+        self.tril = self.tril.to(device)  # buffer (pas un paramètre) -> à déplacer à la main
+        return self
+
 
 class MultiHeadAttention:
     def __init__(self, num_heads, head_size, n_embd, context_size=1024):
@@ -68,6 +75,12 @@ class MultiHeadAttention:
         return [param for head in self.heads for param in head.parameters()] + list(
             self.proj.parameters()
         )
+
+    def to(self, device):
+        for h in self.heads:
+            h.to(device)
+        self.proj.to(device)
+        return self
 
 
 class Block:
@@ -90,6 +103,13 @@ class Block:
             + list(self.ln2.parameters())
         )
 
+    def to(self, device):
+        self.sa.to(device)
+        self.ffwd.to(device)
+        self.ln1.to(device)
+        self.ln2.to(device)
+        return self
+
 
 class FeedForward:
     def __init__(self, n_embd):
@@ -108,6 +128,10 @@ class FeedForward:
     def parameters(self):
         return self.net.parameters()
 
+    def to(self, device):
+        self.net.to(device)
+        return self
+
 
 class Transformer:
     def __init__(self, n_embd, n_head, n_layer, context_size=1024):
@@ -120,6 +144,11 @@ class Transformer:
 
     def parameters(self):
         return [param for block in self.blocks for param in block.parameters()]
+
+    def to(self, device):
+        for block in self.blocks:
+            block.to(device)
+        return self
 
 
 class GPT:
@@ -150,6 +179,14 @@ class GPT:
             + list(self.ln_f.parameters())
             + list(self.lm_head.parameters())
         )
+
+    def to(self, device):
+        self.token_embedding_table.to(device)
+        self.position_embedding_table.to(device)
+        self.blocks.to(device)
+        self.ln_f.to(device)
+        self.lm_head.to(device)
+        return self
 
     def zero_grad(self):
         for param in self.parameters():
