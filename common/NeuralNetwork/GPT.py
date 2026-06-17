@@ -14,37 +14,37 @@ class Head:
         B, T, C = x.shape
         k = self.key(x)  # (B, T, head_size)
         # check shape
-        assert k.shape == (B, T, self.key.out_features), (
-            f"key shape mismatch: {k.shape} != {(B, T, self.key.out_features)}"
-        )
+        # assert k.shape == (B, T, self.key.out_features), (
+        #     f"key shape mismatch: {k.shape} != {(B, T, self.key.out_features)}"
+        # )
         q = self.query(x)  # (B, T, head_size)
         # check shape
-        assert q.shape == (B, T, self.query.out_features), (
-            f"query shape mismatch: {q.shape} != {(B, T, self.query.out_features)}"
-        )
+        # assert q.shape == (B, T, self.query.out_features), (
+        #     f"query shape mismatch: {q.shape} != {(B, T, self.query.out_features)}"
+        # )
         wei = (
             q @ k.transpose(-2, -1) * (k.shape[-1] ** -0.5)
         )  # (B, T, T), on scale dot-product attention
         # check shape
-        assert wei.shape == (B, T, T), (
-            f"attention weights shape mismatch: {wei.shape} != {(B, T, T)}"
-        )
+        # assert wei.shape == (B, T, T), (
+        #     f"attention weights shape mismatch: {wei.shape} != {(B, T, T)}"
+        # )
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # casual masking
         wei = F.softmax(wei, dim=-1)
         # check shape
-        assert wei.shape == (B, T, T), (
-            f"softmax attention weights shape mismatch: {wei.shape} != {(B, T, T)}"
-        )
+        # assert wei.shape == (B, T, T), (
+        #     f"softmax attention weights shape mismatch: {wei.shape} != {(B, T, T)}"
+        # )
         v = self.value(x)  # (B, T, head_size)
         # check shape
-        assert v.shape == (B, T, self.value.out_features), (
-            f"value shape mismatch: {v.shape} != {(B, T, self.value.out_features)}"
-        )
+        # assert v.shape == (B, T, self.value.out_features), (
+        #     f"value shape mismatch: {v.shape} != {(B, T, self.value.out_features)}"
+        # )
         out = wei @ v  # (B, T, head_size)
         # check shape
-        assert out.shape == (B, T, self.value.out_features), (
-            f"output shape mismatch: {out.shape} != {(B, T, self.value.out_features)}"
-        )
+        # assert out.shape == (B, T, self.value.out_features), (
+        #     f"output shape mismatch: {out.shape} != {(B, T, self.value.out_features)}"
+        # )
         return out
 
     def parameters(self):

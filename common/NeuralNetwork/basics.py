@@ -133,6 +133,8 @@ class LayerNorm:
         self.eps = eps
         self.gamma = torch.ones((1, n))
         self.beta = torch.zeros((1, n))
+        self.gamma.requires_grad = True
+        self.beta.requires_grad = True
     def __call__(self, x):
         mean = x.mean(-1, keepdim=True)
         var  = x.var(-1, keepdim=True)
