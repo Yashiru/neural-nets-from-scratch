@@ -17,3 +17,17 @@ def build_vocab(words):
     stoi["."] = 0
     itos = {i: ch for ch, i in stoi.items()}
     return stoi, itos
+
+
+def load_text(filename):
+    """Load a raw text file from the data directory as a single string."""
+    path = DATA_DIR / filename
+    return path.read_text(encoding="utf-8")
+
+
+def build_char_vocab(text):
+    """Build stoi/itos from the unique characters of a text (no reserved token)."""
+    chars = sorted(set(text))
+    stoi = {ch: i for i, ch in enumerate(chars)}
+    itos = {i: ch for ch, i in stoi.items()}
+    return stoi, itos

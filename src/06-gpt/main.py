@@ -11,39 +11,41 @@ Run from the repo root with:  python3 src/06-gpt/main.py
 import torch
 from common import display as ui
 from torch.nn import functional as F
-from common.data import load_words, build_vocab
+from common.data import load_words, build_vocab, load_text, build_char_vocab
 from common.NeuralNetwork.GPT import GPT
 
 # ----------------------------- Hyperparameters ------------------------------ #
 BLOCK_SIZE = 8  # how many characters of context feed each prediction
-N_EMBD = 20  # embedding dimensions per character
+N_EMBD = 256  # embedding dimensions per character
 N_HIDDEN = 200  # neurons in the hidden layer
-BATCH_SIZE = 32  # examples per minibatch (this is `n` in the backward formulas)
-STEPS = 50_000  # optimization steps (used when TRAIN is True)
+BATCH_SIZE = 128  # examples per minibatch (this is `n` in the backward formulas)
+STEPS = 40_000  # optimization steps (used when TRAIN is True)
 LR = 0.07  # base lr
 LR_FINE = LR / 10  # fine-tuning lr after the decay point
 FLATTEN_CONSECUTIVE = 2  # how many consecutive characters to flatten into one vector
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # train on the GPU when available
+DATASET = "names"  # which corpus to train on: "names" | "shakespeare"
 
 
 def main():
-
-    _, itos, n_words, (Xtr, Ytr), (Xdev, Ydev), (Xte, Yte) = load_data()
-    # Ytr contains the next character for each context in Xtr, so it has shape (N,).
-    # Xtr contains the context for each next character, so it has shape (N, BLOCK_SIZE).
+    _, itos, n_items, (Xtr, Ytr), (Xdev, Ydev), (Xte, Yte) = load_data(DATASET)
+    # X holds (N, BLOCK_SIZE) context windows; Y holds the same windows shifted by
+    # one position, so every position carries its next-token target (N, BLOCK_SIZE).
     vocab_size = len(itos)
 
     model = GPT(vocab_size, N_EMBD, n_head=4, n_layer=4)
     model.to(DEVICE)
 
     ui.banner(
-        "MANUAL BACKPROPAGATION  (tensor-level)",
-        f"MLP + BatchNorm, gradients by hand   (context = {BLOCK_SIZE} chars)",
+        "DECODER-ONLY TRANSFORMER  (GPT from scratch)",
+        f"masked self-attention, autograd + manual optimizer   (context = {BLOCK_SIZE} chars)",
     )
 
+    units = "characters" if DATASET == "shakespeare" else "words"
     ui.section("Dataset")
-    ui.kv("words", f"{n_words:,}")
-    ui.kv("vocabulary", f"{vocab_size} tokens  (a-z + '.')")
+    ui.kv("corpus", DATASET)
+    ui.kv("size", f"{n_items:,} {units}")
+    ui.kv("vocabulary", f"{vocab_size} tokens")
     ui.kv("train examples", f"{Xtr.shape[0]:,}")
 
     ui.section("Model")
@@ -55,19 +57,30 @@ def main():
     ui.kv("batch size (n)", BATCH_SIZE)
     ui.kv("device", DEVICE)
 
-    # --------------------- Train with the manual gradients ---------------------- #
-    ui.section("Training  (manual gradients only)")
+    # ------------------------------- Train the model ---------------------------- #
+    ui.section("Training")
     train(model, Xtr, Ytr)
 
-    # ------------------------------ Generate names ------------------------------ #
-    samples = [generate(model, itos, BLOCK_SIZE) for _ in range(20)]
-    first = next((s for s in samples if s[0]), samples[0])
+    # --------------------------- Held-out loss estimates ------------------------ #
+    ui.section("Evaluation")
+    ui.kv("dev loss", f"{evaluate_loss(model, Xdev, Ydev):.4f}  nats")
+    ui.kv("test loss", f"{evaluate_loss(model, Xte, Yte):.4f}  nats")
 
-    ui.section("Sampling Trace  (first generated name)")
-    ui.trace(first[1])
-
-    ui.section(f"Generated Names  ({len(samples)} samples)")
-    ui.name_list([s for s in samples if s[0]])
+    # ------------------------------- Sample the model --------------------------- #
+    if DATASET == "names":
+        samples = [
+            generate(model, itos, BLOCK_SIZE, max_new_tokens=40, stop_token=0)
+            for _ in range(20)
+        ]
+        first = next((s for s in samples if s[0]), samples[0])
+        ui.section("Sampling Trace  (first generated name)")
+        ui.trace(first[1])
+        ui.section(f"Generated Names  ({len(samples)} samples)")
+        ui.name_list([s for s in samples if s[0]])
+    else:
+        text, _ = generate(model, itos, BLOCK_SIZE, max_new_tokens=500)
+        ui.section("Generated Text  (500 characters)")
+        print(text)
 
 
 def train(model, Xtr, Ytr):
@@ -86,20 +99,34 @@ def train(model, Xtr, Ytr):
             loss.backward()
             model.optimize(lr=LR_FINE if step >= decay_at else LR)
 
-            if step % 100 == 0 or step == STEPS - 1:
+            if step % 250 == 0 or step == STEPS - 1:
                 losses.append(loss.item())
             step_done(loss=loss.item(), lr=LR_FINE if step >= decay_at else LR)
 
     ui.kv("final loss", f"{losses[-1]:.4f}  nats  (last minibatch)")
     ui.kv("initial loss", f"{losses[0]:.4f}  nats")
-    ui.loss_curve(losses, title="Training loss  (manual backprop)")
+    ui.loss_curve(losses, title="Training loss")
 
 
 @torch.no_grad()
-def generate(model, itos, block_size, max_len=40):
+def evaluate_loss(model, X, Y, batch_size=512):
+    """Average cross-entropy over a whole split, computed in batches on the device."""
+    X, Y = X.to(DEVICE), Y.to(DEVICE)
+    total, count = 0.0, 0
+    for i in range(0, X.shape[0], batch_size):
+        xb, yb = X[i : i + batch_size], Y[i : i + batch_size]
+        logits = model(xb)
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), yb.view(-1))
+        total += loss.item() * xb.shape[0]
+        count += xb.shape[0]
+    return total / count
+
+
+@torch.no_grad()
+def generate(model, itos, block_size, max_new_tokens=40, stop_token=None):
     context = [0] * block_size
     out, steps = [], []
-    while len(out) < max_len:
+    for _ in range(max_new_tokens):
         logits = model(torch.tensor([context], device=DEVICE))  # (1, T, vocab_size)
         logits = logits[:, -1, :]  # keep only the last step's prediction -> (1, vocab_size)
 
@@ -108,13 +135,22 @@ def generate(model, itos, block_size, max_len=40):
         ctx = "".join(itos[i] for i in context)
         steps.append((ctx, itos[ix], float(probs[0, ix])))
         context = context[1:] + [ix]
-        if ix == 0:  # '.' = end-of-name token
+        if ix == stop_token:  # reached the end-of-sequence token (names use '.')
             break
         out.append(itos[ix])
     return "".join(out), steps
 
 
-def load_data():
+def load_data(dataset):
+    """Dispatch to the loader for the selected corpus."""
+    if dataset == "names":
+        return load_names_data()
+    if dataset == "shakespeare":
+        return load_text_data()
+    raise ValueError(f"unknown dataset: {dataset!r} (expected 'names' or 'shakespeare')")
+
+
+def load_names_data():
     """Load names, shuffle, and split 80/10/10 into train/dev/test tensors."""
     words = load_words()
     stoi, itos = build_vocab(words)
@@ -127,8 +163,20 @@ def load_data():
     return stoi, itos, len(words), tr, dev, te
 
 
+def load_text_data(filename="tinyshakespeare.txt"):
+    """Load a text corpus, encode it to one stream, and split it 80/10/10."""
+    text = load_text(filename)
+    stoi, itos = build_char_vocab(text)
+    data = torch.tensor([stoi[c] for c in text], dtype=torch.long)
+    n1, n2 = int(0.8 * len(data)), int(0.9 * len(data))
+    tr = build_text_dataset(data[:n1], BLOCK_SIZE)
+    dev = build_text_dataset(data[n1:n2], BLOCK_SIZE)
+    te = build_text_dataset(data[n2:], BLOCK_SIZE)
+    return stoi, itos, len(text), tr, dev, te
+
+
 def build_dataset(words, stoi, block_size):
-    """Turn words into (context -> next char) tensors X (N, block_size), Y (N,)."""
+    """Turn words into (window, next-token-per-position) tensors, both (N, block_size)."""
     X, Y = [], []
     for w in words:
         context = [0] * block_size
@@ -138,6 +186,17 @@ def build_dataset(words, stoi, block_size):
             context = context[1:] + [ix]
             Y.append(context)
     return torch.tensor(X), torch.tensor(Y)
+
+
+def build_text_dataset(stream, block_size):
+    """Slice a continuous token stream into (window, next-token-per-position) tensors.
+
+    Y is the window shifted one position right, so each position predicts the
+    following token. Both X and Y have shape (len(stream) - block_size, block_size).
+    """
+    X = stream[:-1].unfold(0, block_size, 1).contiguous()
+    Y = stream[1:].unfold(0, block_size, 1).contiguous()
+    return X, Y
 
 
 if __name__ == "__main__":
