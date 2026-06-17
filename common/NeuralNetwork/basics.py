@@ -7,6 +7,7 @@ class Sequential:
             p.requires_grad = True
     def __call__(self, x, y=None):
         self.target = y
+        self.loss = None
         for layer in self.layers:
             x = layer(x)
         self.out = x
@@ -49,6 +50,13 @@ class Linear:
 class Tanh:
     def __call__(self, x):
         self.out = torch.tanh(x)
+        return self.out
+    def parameters(self):
+        return []
+
+class ReLu:
+    def __call__(self, x):
+        self.out = torch.maximum(x, torch.zeros_like(x))
         return self.out
     def parameters(self):
         return []
@@ -108,3 +116,16 @@ class FlattenConsecutive:
         return x
     def parameters(self):
         return []
+    
+class LayerNorm:
+    def __init__(self, n, eps=1e-5):
+        self.eps = eps
+        self.gamma = torch.ones((1, n))
+        self.beta = torch.zeros((1, n))
+    def __call__(self, x):
+        mean = x.mean(-1, keepdim=True)
+        var  = x.var(-1, keepdim=True)
+        self.out = (x - mean) / torch.sqrt(var + self.eps) * self.gamma + self.beta
+        return self.out
+    def parameters(self):
+        return [self.gamma, self.beta]

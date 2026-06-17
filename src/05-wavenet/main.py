@@ -12,7 +12,7 @@ import torch
 from common import display as ui
 from torch.nn import functional as F
 from common.data import load_words, build_vocab
-from common.NeuralNetwork.main import (
+from common.NeuralNetwork.basics import (
     Sequential,
     Linear,
     Tanh,
