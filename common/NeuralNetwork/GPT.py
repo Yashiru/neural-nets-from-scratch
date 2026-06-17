@@ -24,12 +24,12 @@ class Head:
         # )
         wei = (
             q @ k.transpose(-2, -1) * (k.shape[-1] ** -0.5)
-        )  # (B, T, T), on scale dot-product attention
+        )  # (B, T, T), scaled dot-product attention
         # check shape
         # assert wei.shape == (B, T, T), (
         #     f"attention weights shape mismatch: {wei.shape} != {(B, T, T)}"
         # )
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # casual masking
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # causal masking
         wei = F.softmax(wei, dim=-1)
         # check shape
         # assert wei.shape == (B, T, T), (
@@ -58,9 +58,44 @@ class Head:
         self.key.to(device)
         self.query.to(device)
         self.value.to(device)
-        self.tril = self.tril.to(device)  # buffer (pas un paramètre) -> à déplacer à la main
+        self.tril = self.tril.to(device)  # buffer (not a parameter) -> must be moved manually
         return self
 
+class OptimizedMultiHeadAttention:
+    def __init__(self, num_heads, head_size, n_embd, context_size=1024):
+        self.num_heads = num_heads
+        self.head_size = head_size
+        # one projection per q/k/v, covering ALL heads at once
+        self.key   = torch.nn.Linear(n_embd, num_heads * head_size, bias=False)
+        self.query = torch.nn.Linear(n_embd, num_heads * head_size, bias=False)
+        self.value = torch.nn.Linear(n_embd, num_heads * head_size, bias=False)
+        self.proj  = torch.nn.Linear(num_heads * head_size, n_embd)
+        self.tril  = torch.tril(torch.ones(context_size, context_size))
+
+    def __call__(self, x):
+        B, T, C = x.shape
+        nh, hs = self.num_heads, self.head_size
+        # (B,T,C) -> (B,T,nh,hs) -> (B,nh,T,hs): move the heads into the batch dim
+        k = self.key(x).view(B, T, nh, hs).transpose(1, 2)
+        q = self.query(x).view(B, T, nh, hs).transpose(1, 2)
+        v = self.value(x).view(B, T, nh, hs).transpose(1, 2)
+
+        wei = q @ k.transpose(-2, -1) * (hs ** -0.5)          # (B,nh,T,T), a single batched matmul
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+        wei = F.softmax(wei, dim=-1)
+        out = wei @ v                                          # (B,nh,T,hs)
+        out = out.transpose(1, 2).contiguous().view(B, T, nh * hs)  # recombine the heads
+        return self.proj(out)
+
+    def parameters(self):
+        return (list(self.key.parameters()) + list(self.query.parameters())
+                + list(self.value.parameters()) + list(self.proj.parameters()))
+
+    def to(self, device):
+        self.key.to(device); self.query.to(device)
+        self.value.to(device); self.proj.to(device)
+        self.tril = self.tril.to(device)
+        return self
 
 class MultiHeadAttention:
     def __init__(self, num_heads, head_size, n_embd, context_size=1024):
@@ -85,14 +120,14 @@ class MultiHeadAttention:
 
 class Block:
     def __init__(self, n_embd, n_head, context_size=1024):
-        self.sa = MultiHeadAttention(n_head, n_embd // n_head, n_embd, context_size)
+        self.sa = OptimizedMultiHeadAttention(n_head, n_embd // n_head, n_embd, context_size)
         self.ffwd = FeedForward(n_embd)
         self.ln1 = LayerNorm(n_embd)
         self.ln2 = LayerNorm(n_embd)
 
     def __call__(self, x):
-        x = x + self.sa(self.ln1(x))  # communication (pre-norm + résiduel)
-        x = x + self.ffwd(self.ln2(x))  # computation  (pre-norm + résiduel)
+        x = x + self.sa(self.ln1(x))  # communication (pre-norm + residual)
+        x = x + self.ffwd(self.ln2(x))  # computation  (pre-norm + residual)
         return x
 
     def parameters(self):
@@ -192,8 +227,21 @@ class GPT:
         for param in self.parameters():
             if param.grad is not None:
                 param.grad.zero_()
+    
+    def optimized_zero_grad(self):
+        grads = [p.grad for p in self.parameters() if p.grad is not None]
+        if grads:
+            torch._foreach_zero_(grads)            # zero all grads at once, fused
 
     def optimize(self, lr):
         for param in self.parameters():
             if param.grad is not None:
                 param.data -= lr * param.grad
+    
+    def optimized_optimize(self, lr):
+        datas, grads = [], []
+        for p in self.parameters():
+            if p.grad is not None:
+                datas.append(p.data)               # .data: bypass autograd, like before
+                grads.append(p.grad)
+        torch._foreach_add_(datas, grads, alpha=-lr)   # data[i] += -lr * grad[i], fused

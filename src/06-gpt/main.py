@@ -9,8 +9,11 @@ Run from the repo root with:  python3 src/06-gpt/main.py
 """
 
 import torch
-from common import display as ui
 from torch.nn import functional as F
+from torch.profiler import profile, ProfilerActivity, schedule
+
+
+from common import display as ui
 from common.data import load_words, build_vocab, load_text, build_char_vocab
 from common.NeuralNetwork.GPT import GPT
 
@@ -24,9 +27,10 @@ LR = .1
 LR_FINE = LR / 10  # fine-tuning lr after the decay point
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # train on the GPU when available
 DATASET = "shakespeare"  # which corpus to train on: "names" | "shakespeare"
-USE_AMP = False  # mixed precision. Measured: it only pays off on big models
+USE_AMP = True  # mixed precision. Measured: it only pays off on big models
 # (n_embd >= ~384, long context, large batch); on small models the autocast cast
 # overhead makes each step SLOWER. Flip to True once the model is large enough.
+PROFILE = False  # set True to profile ~10 steps with torch.profiler instead of training
 
 
 def main():
@@ -62,6 +66,9 @@ def main():
     ui.kv("precision", str(amp_dtype).rsplit(".", 1)[-1] if amp_dtype else "float32")
 
     # ------------------------------- Train the model ---------------------------- #
+    if PROFILE:
+        profile_training(model, Xtr, Ytr, amp_dtype)
+        return
     ui.section("Training")
     train(model, Xtr, Ytr, amp_dtype)
 
@@ -105,6 +112,28 @@ def pick_amp_dtype():
     return None
 
 
+def training_step(model, Xtr, Ytr, amp_dtype, loss_scale, lr):
+    """Run one optimization step on a random minibatch; return the (unscaled) loss."""
+    ix = torch.randint(0, Xtr.shape[0], (BATCH_SIZE,), device=DEVICE)
+    Xb, Yb = Xtr[ix], Ytr[ix]
+    if amp_dtype is not None:
+        with torch.autocast(device_type=DEVICE, dtype=amp_dtype):
+            logits = model(Xb)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Yb.view(-1))
+    else:
+        logits = model(Xb)
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Yb.view(-1))
+
+    model.optimized_zero_grad()
+    (loss * loss_scale).backward()
+    if loss_scale != 1.0:
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad.mul_(1.0 / loss_scale)
+    model.optimized_optimize(lr=lr)
+    return loss
+
+
 def train(model, Xtr, Ytr, amp_dtype=None):
     """Train with autograd + the hand-rolled optimizer, optionally in mixed precision."""
     decay_at = int(0.6 * STEPS)
@@ -115,26 +144,8 @@ def train(model, Xtr, Ytr, amp_dtype=None):
     loss_scale = 1024.0 if amp_dtype == torch.float16 else 1.0
     with ui.training_progress(STEPS) as step_done:
         for step in range(STEPS):
-            ix = torch.randint(0, Xtr.shape[0], (BATCH_SIZE,), device=DEVICE)
-            Xb, Yb = Xtr[ix], Ytr[ix]
             lr = LR_FINE if step >= decay_at else LR
-
-            if amp_dtype is not None:
-                with torch.autocast(device_type=DEVICE, dtype=amp_dtype):
-                    logits = model(Xb)
-                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Yb.view(-1))
-            else:
-                logits = model(Xb)
-                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Yb.view(-1))
-
-            model.zero_grad()
-            (loss * loss_scale).backward()
-            if loss_scale != 1.0:
-                for p in model.parameters():
-                    if p.grad is not None:
-                        p.grad.mul_(1.0 / loss_scale)
-            model.optimize(lr=lr)
-
+            loss = training_step(model, Xtr, Ytr, amp_dtype, loss_scale, lr)
             if step % 100 == 0 or step == STEPS - 1:
                 losses.append(loss.item())
                 step_done(loss=loss.item(), lr=lr)
@@ -144,6 +155,29 @@ def train(model, Xtr, Ytr, amp_dtype=None):
     ui.kv("final loss", f"{losses[-1]:.4f}  nats  (last minibatch)")
     ui.kv("initial loss", f"{losses[0]:.4f}  nats")
     ui.loss_curve(losses, title="Training loss")
+
+
+def profile_training(model, Xtr, Ytr, amp_dtype=None, active=10):
+    """Profile a few steps (after warmup) with torch.profiler, then print a CUDA-time
+    summary and dump a chrome trace.
+
+    Open trace.json at https://ui.perfetto.dev: gaps in the GPU row mean the GPU sat
+    idle waiting on the CPU (launch-bound); a solid GPU row means compute-bound.
+    """
+    Xtr, Ytr = Xtr.to(DEVICE), Ytr.to(DEVICE)
+    loss_scale = 1024.0 if amp_dtype == torch.float16 else 1.0
+    sched = schedule(wait=2, warmup=3, active=active)  # skip 2, warm up 3, record `active`
+    with profile(
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        schedule=sched,
+        record_shapes=True,
+    ) as prof:
+        for _ in range(2 + 3 + active):
+            training_step(model, Xtr, Ytr, amp_dtype, loss_scale, LR)
+            prof.step()  # advance the scheduler every iteration
+
+    print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=15))
+    prof.export_chrome_trace("trace.json")
 
 
 @torch.no_grad()

@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 
 class Sequential:
     def __init__(self, layers):
@@ -117,11 +118,11 @@ class Flatten:
     
 class FlattenConsecutive:
     def __init__(self, n):
-        self.n = n                       # taille du groupe (2 ici)
+        self.n = n                       # group size (2 here)
     def __call__(self, x):
         B, T, C = x.shape
-        x = x.view(B, T // self.n, C * self.n)   # regrouper par n
-        if x.shape[1] == 1:                       # plus qu'un groupe -> aplatir
+        x = x.view(B, T // self.n, C * self.n)   # group by n
+        if x.shape[1] == 1:                       # only one group left -> flatten
             x = x.squeeze(1)
         self.out = x
         return x
@@ -131,14 +132,14 @@ class FlattenConsecutive:
 class LayerNorm:
     def __init__(self, n, eps=1e-5):
         self.eps = eps
-        self.gamma = torch.ones((1, n))
-        self.beta = torch.zeros((1, n))
+        self.normalized_shape = (n,)
+        self.gamma = torch.ones(n)   # weight, shape (n,) as F.layer_norm expects
+        self.beta = torch.zeros(n)   # bias
         self.gamma.requires_grad = True
         self.beta.requires_grad = True
     def __call__(self, x):
-        mean = x.mean(-1, keepdim=True)
-        var  = x.var(-1, keepdim=True)
-        self.out = (x - mean) / torch.sqrt(var + self.eps) * self.gamma + self.beta
+        # one fused kernel instead of separate mean/var/normalize/scale/shift ops
+        self.out = F.layer_norm(x, self.normalized_shape, self.gamma, self.beta, self.eps)
         return self.out
     def parameters(self):
         return [self.gamma, self.beta]
