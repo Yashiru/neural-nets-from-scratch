@@ -152,7 +152,7 @@ def diagnose_init(params, Xtr, bn):
     ui.histogram(
         h.view(-1)[::400].tolist(),
         bins=30,
-        title="Initial hidden activations (tanh)  — spikes at ±1 = saturation",
+        title="Initial hidden activations (tanh): spikes at ±1 = saturation",
         xlabel="h",
     )
 

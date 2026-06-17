@@ -6,7 +6,7 @@
   (the colormap *is* the heatmap; no hand-rolled color ramp).
 - `plotext`   → in-terminal line charts (training curves).
 
-No from-scratch rendering or color math remains — only glue that fills the
+No from-scratch rendering or color math remains, only glue that fills the
 library widgets.
 
 Typical use:

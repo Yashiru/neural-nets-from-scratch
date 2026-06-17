@@ -1,7 +1,7 @@
 """Experiment: 05-wavenet.
 
 Next idea I want to try: grow the flat MLP into a hierarchical, tree-like
-network (à la WaveNet) that fuses the context a few characters at a time
+network (WaveNet-style) that fuses the context a few characters at a time
 instead of all at once, and wrap the layers in a small reusable module API.
 Not built yet.
 
@@ -95,7 +95,7 @@ def main():
 
 
 def train(model, Xtr, Ytr):
-    """Train using ONLY the hand-derived gradients — no loss.backward()."""
+    """Train using ONLY the hand-derived gradients, no loss.backward()."""
     model.train()
     decay_at = int(0.6 * STEPS)
     losses = []

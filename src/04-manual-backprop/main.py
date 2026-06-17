@@ -162,7 +162,7 @@ def manual_backward(params, Xb, Yb, fwdCache):
       - tanh:           dhpreact = (1 - h**2) * dh
       - matmul C=A@B:   dA = dC @ B.T ,  dB = A.T @ dC   (shapes pin the transposes)
       - view:           reshape the gradient back to emb's shape
-      - indexing C[X]:  scatter-add (dC.index_add_) — a reused char accumulates
+      - indexing C[X]:  scatter-add (dC.index_add_), since a reused char accumulates
       - broadcast in forward  ==>  .sum over that axis in backward
       - compact BatchNorm backward:
             dhprebn = bngain * bnvar_inv / n * (
@@ -310,7 +310,7 @@ def bn_calibrate(params, Xtr):
 
     forward() always computes *batch* statistics, which are undefined for a
     single example: var over 1 element divides by (n - 1) = 0 and returns NaN.
-    To sample one character at a time we need population stats instead — run one
+    To sample one character at a time we need population stats instead: run one
     forward up to the pre-activation over the whole train split and freeze its
     mean/var. Returns (bnmean, bnvar), each (1, n_hidden).
     """
@@ -318,7 +318,7 @@ def bn_calibrate(params, Xtr):
     embcat = C[Xtr].view(Xtr.shape[0], -1)  # (N, block_size*n_embd)
     hprebn = embcat @ W1  # (N, n_hidden)
     bnmean = hprebn.mean(0, keepdim=True)  # (1, n_hidden)
-    bnvar = hprebn.var(0, keepdim=True)  # (1, n_hidden)  unbiased — fine over the full split
+    bnvar = hprebn.var(0, keepdim=True)  # (1, n_hidden)  unbiased, fine over the full split
     return bnmean, bnvar
 
 
@@ -353,7 +353,7 @@ def generate(params, itos, block_size, generator, bnmean, bnvar, max_len=40):
 
 
 def train(params, Xtr, Ytr, g):
-    """Train using ONLY the hand-derived gradients — no loss.backward()."""
+    """Train using ONLY the hand-derived gradients, no loss.backward()."""
     decay_at = int(0.6 * STEPS)
     losses = []
     with ui.training_progress(STEPS) as step_done:
