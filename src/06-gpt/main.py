@@ -15,16 +15,18 @@ from common.data import load_words, build_vocab, load_text, build_char_vocab
 from common.NeuralNetwork.GPT import GPT
 
 # ----------------------------- Hyperparameters ------------------------------ #
-BLOCK_SIZE = 8  # how many characters of context feed each prediction
+BLOCK_SIZE = 32  # how many characters of context feed each prediction
 N_EMBD = 256  # embedding dimensions per character
-N_HIDDEN = 200  # neurons in the hidden layer
-BATCH_SIZE = 128  # examples per minibatch (this is `n` in the backward formulas)
+N_HIDDEN = 512  # neurons in the hidden layer
+BATCH_SIZE = 256  # examples per minibatch (this is `n` in the backward formulas)
 STEPS = 40_000  # optimization steps (used when TRAIN is True)
-LR = 0.07  # base lr
+LR = .1
 LR_FINE = LR / 10  # fine-tuning lr after the decay point
-FLATTEN_CONSECUTIVE = 2  # how many consecutive characters to flatten into one vector
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # train on the GPU when available
-DATASET = "names"  # which corpus to train on: "names" | "shakespeare"
+DATASET = "shakespeare"  # which corpus to train on: "names" | "shakespeare"
+USE_AMP = False  # mixed precision. Measured: it only pays off on big models
+# (n_embd >= ~384, long context, large batch); on small models the autocast cast
+# overhead makes each step SLOWER. Flip to True once the model is large enough.
 
 
 def main():
@@ -35,6 +37,7 @@ def main():
 
     model = GPT(vocab_size, N_EMBD, n_head=4, n_layer=4)
     model.to(DEVICE)
+    amp_dtype = pick_amp_dtype() if USE_AMP else None
 
     ui.banner(
         "DECODER-ONLY TRANSFORMER  (GPT from scratch)",
@@ -56,10 +59,11 @@ def main():
     ui.kv("parameters", f"{sum(p.nelement() for p in model.parameters()):,}")
     ui.kv("batch size (n)", BATCH_SIZE)
     ui.kv("device", DEVICE)
+    ui.kv("precision", str(amp_dtype).rsplit(".", 1)[-1] if amp_dtype else "float32")
 
     # ------------------------------- Train the model ---------------------------- #
     ui.section("Training")
-    train(model, Xtr, Ytr)
+    train(model, Xtr, Ytr, amp_dtype)
 
     # --------------------------- Held-out loss estimates ------------------------ #
     ui.section("Evaluation")
@@ -83,25 +87,59 @@ def main():
         print(text)
 
 
-def train(model, Xtr, Ytr):
-    """Train using ONLY the hand-derived gradients — no loss.backward()."""
+def pick_amp_dtype():
+    """Pick the fastest safe autocast dtype for the current GPU (None -> full FP32).
+
+    Ampere+ (sm_80+) has bf16 tensor cores and needs no loss scaling; Volta/Turing
+    (sm_70/75) has fp16 tensor cores (scaling required); older GPUs / CPU stay FP32.
+    NB: torch.cuda.is_bf16_supported() reports True on Turing via (unaccelerated)
+    emulation, so we gate on the compute capability instead.
+    """
+    if not torch.cuda.is_available():
+        return None
+    major, _ = torch.cuda.get_device_capability()
+    if major >= 8:
+        return torch.bfloat16
+    if major >= 7:
+        return torch.float16
+    return None
+
+
+def train(model, Xtr, Ytr, amp_dtype=None):
+    """Train with autograd + the hand-rolled optimizer, optionally in mixed precision."""
     decay_at = int(0.6 * STEPS)
     losses = []
     Xtr, Ytr = Xtr.to(DEVICE), Ytr.to(DEVICE)  # move the whole dataset to the GPU once
+    # fp16 backward underflows tiny gradients to zero; a fixed loss scale lifts them
+    # above the fp16 floor, then we divide it back out. (bf16 and fp32 need no scaling.)
+    loss_scale = 1024.0 if amp_dtype == torch.float16 else 1.0
     with ui.training_progress(STEPS) as step_done:
         for step in range(STEPS):
             ix = torch.randint(0, Xtr.shape[0], (BATCH_SIZE,), device=DEVICE)
             Xb, Yb = Xtr[ix], Ytr[ix]
-            logits = model(Xb)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Yb.view(-1))
+            lr = LR_FINE if step >= decay_at else LR
+
+            if amp_dtype is not None:
+                with torch.autocast(device_type=DEVICE, dtype=amp_dtype):
+                    logits = model(Xb)
+                    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Yb.view(-1))
+            else:
+                logits = model(Xb)
+                loss = F.cross_entropy(logits.view(-1, logits.size(-1)), Yb.view(-1))
 
             model.zero_grad()
-            loss.backward()
-            model.optimize(lr=LR_FINE if step >= decay_at else LR)
+            (loss * loss_scale).backward()
+            if loss_scale != 1.0:
+                for p in model.parameters():
+                    if p.grad is not None:
+                        p.grad.mul_(1.0 / loss_scale)
+            model.optimize(lr=lr)
 
-            if step % 250 == 0 or step == STEPS - 1:
+            if step % 100 == 0 or step == STEPS - 1:
                 losses.append(loss.item())
-            step_done(loss=loss.item(), lr=LR_FINE if step >= decay_at else LR)
+                step_done(loss=loss.item(), lr=lr)
+            else:
+                step_done(loss=losses[-1], lr=lr, force=True)
 
     ui.kv("final loss", f"{losses[-1]:.4f}  nats  (last minibatch)")
     ui.kv("initial loss", f"{losses[0]:.4f}  nats")
