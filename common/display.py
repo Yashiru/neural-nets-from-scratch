@@ -303,6 +303,39 @@ def training_progress(total, description="optimizing"):
 
         yield update
 
+# tokenizer training progress bar, used as a context manager, showing the current step, the most frequent pair, its count, and the current vocabulary size. Yields an `update(step, pair, count, vocab_size)` callable; wrap the training loop with it::
+@contextmanager
+def tokenizer_training_progress(total, description="training tokenizer"):
+    """Live tokenizer training progress bar, used as a context manager.
+
+    `total` is the number of merges to perform (vocab_size - 256), not the
+    final vocab size. Yields an `update(step, pair, count, vocab_size)`
+    callable; wrap the training loop with it::
+
+        with ui.tokenizer_training_progress(vocab_size - 256) as step_done:
+            for k in range(vocab_size - 256):
+                ...
+                step_done(k + 1, pair, stats[pair], len(vocab))
+    """
+    progress = Progress(
+        TextColumn("  [bold]{task.description}"),
+        BarColumn(bar_width=None, complete_style="cyan", finished_style="green"),
+        MofNCompleteColumn(),
+        TextColumn("· pair [bold magenta]{task.fields[pair]}"),
+        TextColumn("· count [bold yellow]{task.fields[count]:>6}"),
+        TextColumn("· vocab size [bold green]{task.fields[vocab_size]:>5}"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    with progress:
+        task = progress.add_task(description, total=total,
+                                 step=0, pair="", count=0, vocab_size=0)
+
+        def update(step, pair, count, vocab_size):
+            progress.update(task, completed=step, pair=str(pair),
+                            count=count, vocab_size=vocab_size)
+
+        yield update
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Name helpers (sampling + styling)

@@ -11,6 +11,7 @@ dependencies = [
     "jupyter",
     "rich",
     "plotext",
+    "regex>=2026.5.9",
 ]
 
 [tool.setuptools.packages.find]
