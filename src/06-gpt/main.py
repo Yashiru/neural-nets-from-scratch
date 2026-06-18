@@ -18,7 +18,7 @@ from common.data import load_words, build_vocab, load_text, build_char_vocab
 from common.NeuralNetwork.GPT import GPT
 
 # ----------------------------- Hyperparameters ------------------------------ #
-BLOCK_SIZE = 32  # how many characters of context feed each prediction
+BLOCK_SIZE = 128  # how many characters of context feed each prediction
 N_EMBD = 256  # embedding dimensions per character
 N_HIDDEN = 512  # neurons in the hidden layer
 BATCH_SIZE = 256  # examples per minibatch (this is `n` in the backward formulas)
@@ -38,8 +38,11 @@ def main():
     # X holds (N, BLOCK_SIZE) context windows; Y holds the same windows shifted by
     # one position, so every position carries its next-token target (N, BLOCK_SIZE).
     vocab_size = len(itos)
+    
+    n_head = 2
+    n_layer = 2
 
-    model = GPT(vocab_size, N_EMBD, n_head=4, n_layer=4)
+    model = GPT(vocab_size, N_EMBD, n_head=n_head, n_layer=n_layer)
     model.to(DEVICE)
     amp_dtype = pick_amp_dtype() if USE_AMP else None
 
@@ -58,7 +61,7 @@ def main():
     ui.section("Model")
     ui.kv(
         "architecture",
-        f"GPT(vocab_size={vocab_size}, n_embd={N_EMBD}, n_head=4, n_layer=4)",
+        f"GPT(vocab_size={vocab_size}, n_embd={N_EMBD}, n_head={n_head}, n_layer={n_layer})",
     )
     ui.kv("parameters", f"{sum(p.nelement() for p in model.parameters()):,}")
     ui.kv("batch size (n)", BATCH_SIZE)
